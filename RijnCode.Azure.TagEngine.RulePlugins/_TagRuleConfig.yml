@@ -1,0 +1,26 @@
+rules_config:
+  all_tags:
+    - order: 1
+      instance_name: Leading Whitespace
+      rule_definition: Invoke-TagRuleRegexReplaceDefinition
+      inputs:
+        search_regex: ^\s+
+        value_replacement: " "
+    - order: 2
+      instance_name: Trailing Whitespace
+      rule_definition: Invoke-TagRuleRegexReplaceDefinition
+      inputs:
+        search_regex: \s+$
+        value_replacement: " "
+  subscription_required:
+    - order: 1
+      instance_name: Subscription Required Tags
+      rule_definition: Invoke-TagRuleRatcliffObershelpMatchCloneDefinition
+      inputs:
+        minimum_score: .95
+  resource_group_required:
+    - order: 1
+      instance_name: Resource Group Required Tags
+      rule_definition: Invoke-TagRuleRatcliffObershelpMatchCloneDefinition
+      inputs:
+        minimum_score: .95
