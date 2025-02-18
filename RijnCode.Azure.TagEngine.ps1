@@ -8,15 +8,15 @@ Rule Engine for applying tags to Azure resources
 Rule Engine for applying tags to Azure resources
 
 .EXAMPLE
-RijnCode.Azure.TagEngine.ps1 -RequiredTagKeys @("key1", "key2") -Mode "Subscription" -TenantId "00000000-0000-0000-0000-000000000000" -SubscriptionIdFilters @("00000000-0000-0000-0000-000000000000")
+RijnCode.Azure.TagEngine.ps1 -RequiredTagKeys @("key1", "key2") -Scopes @("Subscription") -TenantId "00000000-0000-0000-0000-000000000000" -SubscriptionIdFilters @("00000000-0000-0000-0000-000000000000")
 #>
 [CmdletBinding(SupportsShouldProcess = $true)]
 param (
     [Parameter(Mandatory = $true)]
     [string[]]$RequiredTagKeys,
     [Parameter(Mandatory = $true)]
-    [ValidateSet("Full", "Subscription", "ResourceGroup", "Resource")]
-    [string]$Mode,
+    [ValidateSet("Subscription", "ResourceGroup", "Resource")]
+    [string[]]$Scopes,
     [Parameter(Mandatory = $true)]
     [ValidatePattern("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")]
     [string]$TenantId,
@@ -283,8 +283,8 @@ begin {
 
         $subcriptionTagHashTable = @{}
         $rawTags = (Get-AzTag -ResourceId $ResourceId)
-        foreach ( $property in $rawTags.psobject.properties.name ) {
-            $subcriptionTagHashTable[$property] = $rawTags.$property
+        foreach ( $tagKey in $rawTags.Properties.TagProperties.Keys ) {
+            $subcriptionTagHashTable[$tagKey] = $rawTags.Properties.TagProperties[$tagKey]
         }
 
         return
@@ -319,8 +319,6 @@ begin {
             [Parameter(Mandatory = $true)]
             [string]$SubscriptionId
         )
-
-        Write-LogHeader -LogLevel "$( [AllLogLevels]::Error )" -Indentation 1 -Header "Processing Subscription: /subscriptions/${SubscriptionId}" -ConsoleColor "Green"
 
         $existingSubscriptionTags = Get-CloudSubscriptionResourceTags -ResourceId "/subscriptions/${SubscriptionId}"
 
@@ -370,10 +368,10 @@ begin {
 
                 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseDeclaredVarsMoreThanAssignments', '', Justification = 'Variable is used in Invoke-Expression')]
                 $currentRuleParams = @{
-                    'InstanceName'   = $ruleSubscriptionRequiredCategoryRule.instance_name
-                    'Inputs'         = $ruleSubscriptionRequiredCategoryRule.inputs
-                    'Tags'           = $updatedSubscriptionTagsRef
-                    'Indentation'    = 1
+                    'InstanceName' = $ruleSubscriptionRequiredCategoryRule.instance_name
+                    'Inputs'       = $ruleSubscriptionRequiredCategoryRule.inputs
+                    'Tags'         = $updatedSubscriptionTagsRef
+                    'Indentation'  = 1
                 }
 
                 Invoke-Expression "$currentRuleFunctionName @currentRuleParams" -Verbose:$false # Disable verbose to hide function reload warning
@@ -407,7 +405,7 @@ begin {
             $rawResourceGroups += $Filters
         }
         else {
-            $rawResourceGroups = Get-AzSubscription -TenantId $TenantId
+            $rawResourceGroups = @((Get-AzResourceGroup).ResourceGroupName)
         }
 
         $rawResourceGroups |
@@ -437,8 +435,6 @@ begin {
         )
 
         $resourceGroupId = "/subscriptions/${SubscriptionId}/resourceGroups/${ResourceGroup}"
-
-        Write-LogHeader -LogLevel "$( [AllLogLevels]::Error )" -Indentation 2 -Header "Processing ResourceGroup: /subscriptions/${SubscriptionId}/resourceGroups/${ResourceGroup}" -ConsoleColor "Green"
 
         $existingResourceGroupTags = Get-CloudSubscriptionResourceTags -ResourceId $resourceGroupId
 
@@ -488,10 +484,10 @@ begin {
 
                 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseDeclaredVarsMoreThanAssignments', '', Justification = 'Variable is used in Invoke-Expression')]
                 $currentRuleParams = @{
-                    'InstanceName'   = $ruleSubscriptionRequiredCategoryRule.instance_name
-                    'Inputs'         = $ruleSubscriptionRequiredCategoryRule.inputs
-                    'Tags'           = $updatedResourceGroupTagsRef
-                    'Indentation'    = 2
+                    'InstanceName' = $ruleSubscriptionRequiredCategoryRule.instance_name
+                    'Inputs'       = $ruleSubscriptionRequiredCategoryRule.inputs
+                    'Tags'         = $updatedResourceGroupTagsRef
+                    'Indentation'  = 2
                 }
 
                 Invoke-Expression "$currentRuleFunctionName @currentRuleParams" -Verbose:$false # Disable verbose to hide function reload warning
@@ -560,8 +556,9 @@ process {
 
     $subscriptionIdsInScope = Get-InScopeSubscriptionIds -Filters $SubscriptionIdFilters
     foreach ($currentSubscriptionId in $subscriptionIdsInScope) {
-
-        if (@("Full", "Subscription") -contains $Mode) {
+        
+        Write-LogHeader -LogLevel "$( [AllLogLevels]::Error )" -Indentation 1 -Header "Processing Subscription: /subscriptions/${currentSubscriptionId}" -ConsoleColor "Green"
+        if ("Subscription" -in $Scopes) {
             if ($Script:processedSubscriptions -contains $currentSubscriptionId) {
                 Write-LogHeader -LogLevel "$( [AllLogLevels]::Debug )" -Indentation 1 -Header "Skipping duplicate subscription: /subscriptions/${currentSubscriptionId}" -ConsoleColor "Magenta"
                 continue;
@@ -573,28 +570,31 @@ process {
         $resourceGroupsinScope = Get-InScopeResourceGroups -SubscriptionId $currentSubscriptionId -Filters $ResourceGroupFilters
         foreach ($currentResourceGroup in $resourceGroupsinScope) {
             $currentResourceGroupId = "/subscriptions/${currentSubscriptionId}/resourceGroups/${currentResourceGroup}"
-            if (@("Full", "ResourceGroup") -contains $Mode) {
-                if ($Script:processedResourceGroups -contains $currentResourceGroupId) {
-                    Write-LogHeader -LogLevel "$( [AllLogLevels]::Verbose )" -Indentation 1 -Header "Skipping duplicate resource group: ${currentResourceGroupId}" -ConsoleColor "Magenta"
-                    continue;
-                }
-
+            
+            if ($Script:processedResourceGroups -contains $currentResourceGroupId) {
+                Write-LogHeader -LogLevel "$( [AllLogLevels]::Verbose )" -Indentation 1 -Header "Skipping duplicate resource group: ${currentResourceGroupId}" -ConsoleColor "Magenta"
+                continue;
+            }
+            Write-LogHeader -LogLevel "$( [AllLogLevels]::Error )" -Indentation 2 -Header "Processing ResourceGroup: ${currentResourceGroupId}" -ConsoleColor "Green"
+            
+            if ("ResourceGroup" -in $Scopes) {
                 Invoke-ResourceGroupTagCleanOrchestrator -SubscriptionId $currentSubscriptionId -ResourceGroup $currentResourceGroup
             }
 
             $resourcesInScope = Get-InScopeResources -SubscriptionId $currentSubscriptionId -ResourceGroup $currentResourceGroup -Filters $ResourceIdFilters
-            if (@("Full", "Resource") -contains $Mode) {
-                foreach ($currentResource in $resourcesInScope) {
-                    if ($Script:processedResources -contains $currentResourceGroupId) {
-                        Write-LogHeader -LogLevel "$( [AllLogLevels]::Verbose )" -Header "Skipping duplicate resource group: ${currentResourceGroupId}" -ConsoleColor "Magenta"
-                        continue;
-                    }
+            
+            foreach ($currentResource in $resourcesInScope) {
+                if ($Script:processedResources -contains $currentResourceGroupId) {
+                    Write-LogHeader -LogLevel "$( [AllLogLevels]::Verbose )" -Header "Skipping duplicate resource group: ${currentResourceGroupId}" -ConsoleColor "Magenta"
+                    continue;
+                }
 
+                if ("Resource" -in $Scopes) {
                     Invoke-ResourceTagCleanOrchestrator -SubscriptionId $currentSubscriptionId -ResourceGroup $currentResourceGroup -Resource $currentResource
                 }
+            
+                Write-LogHeader -LogLevel "$( [AllLogLevels]::Error )" -Indentation 2 -Header "Resource Group Processed: ${currentResourceGroupId}" -ConsoleColor "Green"
             }
-
-            Write-LogHeader -LogLevel "$( [AllLogLevels]::Error )" -Indentation 2 -Header "Resource Group Processed: ${currentResourceGroupId}" -ConsoleColor "Green"
         }
 
         Write-LogHeader -LogLevel "$( [AllLogLevels]::Error )" -Indentation 1 -Header "Subscription Processed: /subscriptions/${currentSubscriptionId}" -ConsoleColor "Green"
