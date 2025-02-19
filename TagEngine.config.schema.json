@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "tag_engine_config": {
+      "type": "object",
+      "properties": {
+        "required_tag_keys": {
+          "type": "array"
+        },
+        "processing_filters": {
+          "type": "object",
+          "properties": {
+            "subscription_id_filter": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "uuid"
+              }
+            },
+            "resource_group_filter": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "resource_id_filter": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "subscription_id_filter",
+            "resource_group_filter",
+            "resource_id_filter"
+          ]
+        },
+        "simulated_results": {
+          "type": "object",
+          "properties": {
+            "in_scope_subscription_ids": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "tags": {
+                    "type": "object",
+                    "properties": {
+                      "environment": {
+                        "type": "string"
+                      },
+                      "cost_center": {
+                        "type": "number"
+                      }
+                    },
+                    "required": []
+                  }
+                },
+                "required": ["id", "tags"]
+              }
+            },
+            "in_scope_resource_groups": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "tags": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                  }
+                },
+                "required": ["name", "tags"]
+              }
+            },
+            "in_scope_resources": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            }
+          },
+          "required": [
+            "in_scope_subscription_ids",
+            "in_scope_resource_groups",
+            "in_scope_resources"
+          ]
+        }
+      },
+      "required": ["processing_filters", "simulated_results"]
+    }
+  },
+  "required": ["tag_engine_config"]
+}

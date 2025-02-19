@@ -13,22 +13,11 @@ RijnCode.Azure.TagEngine.ps1 -RequiredTagKeys @("key1", "key2") -Scopes @("Subsc
 [CmdletBinding(SupportsShouldProcess = $true)]
 param (
     [Parameter(Mandatory = $true)]
-    [string[]]$RequiredTagKeys,
-    [Parameter(Mandatory = $true)]
     [ValidateSet("Subscription", "ResourceGroup", "Resource")]
     [string[]]$Scopes,
     [Parameter(Mandatory = $true)]
     [ValidatePattern("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")]
     [string]$TenantId,
-    [Parameter(Mandatory = $true)]
-    [ValidatePattern("\*|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")]
-    [string[]]$SubscriptionIdFilters,
-    [Parameter(Mandatory = $false)]
-    [ValidatePattern("\*|[0-9a-zA-Z-_]{1,64}")]
-    [string[]]$ResourceGroupFilters = @("*"),
-    [Parameter(Mandatory = $false)]
-    [ValidatePattern("\*|[0-9a-zA-Z-_]{1,64}")]
-    [string[]]$ResourceIdFilters = @("*"),
 
     [Parameter(Mandatory = $false)]
     [ValidateScript({ Test-Path -Path $_ -PathType "Container" })]
@@ -40,6 +29,8 @@ param (
     [ValidateNotNullOrWhiteSpace()]
     [string]$RulePluginMetadataVariableNameFormat = "PluginFunctionMeta-*",
 
+    [Parameter(Mandatory = $false)]
+    [string]$ScriptConfigPath = "${PSScriptRoot}\$( [System.IO.Path]::GetFileNameWithoutExtension((Split-Path -Path $PSCommandPath -Leaf)) ).config.yml",
     [Parameter(Mandatory = $false)]
     [ValidateSet("Debug", "Verbose", "Info", "Warn", "Error", "InheritSwitch")]
     [string]$ConsoleLogLevel = "InheritSwitch",
@@ -60,8 +51,16 @@ begin {
     $VerbosePreference = "Continue"
     Set-StrictMode -Version "Latest"
 
+    # ############################## Script Requirements ##############################
+    
+    if ($PSVersionTable.PSVersion.Major -lt 7) {
+        Write-Error "This script requires PowerShell version 7 or higher."
+        exit 1
+    }
+
     # Explicit import to suppress  module writing verbose messages to output stream
     Import-Module -Name "powershell-yaml" -Verbose:$false *>$null
+    Import-Module -Name "Az.Accounts", "Az.Resources" -Verbose:$false *>$null
 
     # ############################## Constants ##############################
     enum AllLogLevels {
@@ -80,7 +79,6 @@ begin {
     $Script:processedSubscriptions = @()
     $Script:processedResourceGroups = @()
     $Script:processedResources = @()
-
 
     # ############################## Function Definitions ##############################
     function global:Write-LogHeader {
@@ -187,6 +185,23 @@ begin {
         Write-LogMessage -LogLevel "$( [AllLogLevels]::Info )" -Indentation 1 -Message "Log file initialized" -ConsoleColor "White"
     }
 
+    function Initialize-ScriptSettings {
+        [CmdletBinding(SupportsShouldProcess = $false)]
+        param (
+            [Parameter(Mandatory = $true)]
+            [string]$ConfigPath
+        )
+        Write-LogHeader -LogLevel "$( [AllLogLevels]::Info )" -Indentation 1 -Header "Initializing Script Settings" -ConsoleColor "Green"
+
+        $tempConfig = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Yaml -Ordered -Verbose:$false
+        $schemaFilePath = "${PSScriptRoot}\TagEngine.config.schema.json"
+        Test-Json -Json ($tempConfig | ConvertTo-Yaml -JsonCompatible -Verbose:$false) -SchemaFile $schemaFilePath -Options "IgnoreComments", "AllowTrailingCommas"
+
+        Write-LogMessage -LogLevel "$( [AllLogLevels]::Info )" -Indentation 1 -Message "Script Settings Loaded ($( $ConfigPath ))" -ConsoleColor "White"
+
+        $Script:scriptConfig = $tempConfig
+    }
+
     function Import-RulePluginDefinitionsToSession {
         [CmdletBinding(SupportsShouldProcess = $false)]
         [OutputType([hashtable])]
@@ -213,6 +228,8 @@ begin {
         foreach ($Script in $PluginScripts) {
             # Load content in-session and pass file path because it is not available in the child script scope
             & "$( $Script.FullName )" -ExecutingFilePath "$( $Script.FullName )"
+
+            Write-LogMessage -LogLevel "$( [AllLogLevels]::Debug )" -Indentation 1 -Message "Rule Plugin Definition Loaded: $( $Script.Name )"
         }
 
         $rawRuleDefinitions = Get-Variable -Name $RulePluginMetadataVariableNameFormat
@@ -246,16 +263,17 @@ begin {
         [OutputType([array])]
         param (
             [Parameter(Mandatory = $true)]
+            [AllowEmptyCollection()]
             [string[]]$Filters
         )
         $returnSubscriptions = @()
         $rawSubscriptions = @()
 
-        if (($scriptBoundParameters.ContainsKey('SimulateResults') -eq $true) -and ($Filters -contains "*")) {
-            $rawSubscriptions += @('11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222', '33333333-3333-3333-3333-333333333333')
+        if (($scriptBoundParameters.ContainsKey('SimulateResults') -eq $true) -and ($Filters.Count -eq 0)) {
+            $rawSubscriptions += $Script:scriptConfig.tag_engine_config.simulated_results.in_scope_subscription_ids.id
         }
         elseif ($scriptBoundParameters.ContainsKey('SimulateResults') -eq $true) {
-            $rawSubscriptions += $Filters
+            $rawSubscriptions += $Script:scriptConfig.tag_engine_config.processing_filters.subscription_id_filter
         }
         else {
             $rawSubscriptions = Get-AzSubscription -TenantId $TenantId |
@@ -263,7 +281,7 @@ begin {
         }
 
         $rawSubscriptions |
-        Where-Object { ($Filters -contains "*") -or ($Filters -contains $_) -or ($Filters -contains $_) } |
+        Where-Object { ($Filters.Count -eq 0) -or ($Filters -contains $_) -or ($Filters -contains $_) } |
         ForEach-Object { $returnSubscriptions += $_ }
 
         Write-LogMessage -LogLevel "$( [AllLogLevels]::Debug )" -Indentation 0 -Message "subscriptionIdsInScope: $( $returnSubscriptions -join ", " )"
@@ -281,13 +299,13 @@ begin {
             return @{' SimpleKey1' = 'SimpleKey1'; ' Complex TagKey3 ' = ' Complex TagKey3 '; 'Complex TagKey4' = 'Complex TagKey4'; 'simple key 5' = 'simple key 5'; 'SimplKey6' = 'SimplKey6' }
         }
 
-        $subcriptionTagHashTable = @{}
+        $resourceTagHashTable = @{}
         $rawTags = (Get-AzTag -ResourceId $ResourceId)
-        foreach ( $tagKey in $rawTags.Properties.TagProperties.Keys ) {
-            $subcriptionTagHashTable[$tagKey] = $rawTags.Properties.TagProperties[$tagKey]
+        foreach ( $tagKey in ($rawTags.Properties.TagsProperty.Keys ?? @()) ) {
+            $resourceTagHashTable[$tagKey] = $rawTags.Properties.TagsProperty[$tagKey]
         }
 
-        return
+        return $resourceTagHashTable
     }
 
     function Update-CloudResourceTags {
@@ -303,6 +321,9 @@ begin {
 
         Write-LogMessage -LogLevel "$( [AllLogLevels]::Debug )" -Indentation $Indentation -Message "Updating Tags - Resource: $( $ResourceId ) / Tags: $( $Tags | ConvertTo-Json -Compress -Depth 99 )"
 
+        if ($PSCmdlet.ShouldProcess($ResourceId)) {
+
+        }
     }
 
     function Invoke-SubscriptionTagCleanOrchestrator {
@@ -352,7 +373,7 @@ begin {
         }
 
         # Required Dynamic Tag Rules
-        foreach ($currentRequiredTagKey in $RequiredTagKeys) {
+        foreach ($currentRequiredTagKey in $Script:scriptConfig.tag_engine_config.required_tag_keys) {
             foreach ($ruleSubscriptionRequiredCategoryRule in ($Script:scriptRulePluginConfig["rules_config"]["subscription_required"] | Sort-Object -Property order, instance_name)) {
                 $executeRuleDefinition = $Script:scriptRulePluginDefinitions.Value | Where-Object { $_.rule_definition -eq $ruleSubscriptionRequiredCategoryRule.rule_definition }
                 Write-LogMessage -LogLevel "$( [AllLogLevels]::Debug )" -Indentation 1 -Message "Calling Plugin Rule: $( $executeRuleDefinition.RuleName ) ($( $ruleSubscriptionRequiredCategoryRule.instance_name ) - ${currentRequiredTagKey})"
@@ -393,23 +414,24 @@ begin {
             [Parameter(Mandatory = $true)]
             [string]$SubscriptionId,
             [Parameter(Mandatory = $true)]
+            [AllowEmptyCollection()]
             [string[]]$Filters
         )
         $resourceGroupsInScope = @()
         $rawResourceGroups = @()
 
-        if (($scriptBoundParameters.ContainsKey('SimulateResults') -eq $true) -and ($Filters -contains "*")) {
-            $rawResourceGroups += @('my_resource_group1', 'my_resource_group2', 'my_resource_group3')
+        if (($scriptBoundParameters.ContainsKey('SimulateResults') -eq $true) -and ($Filters.Count -eq 0)) {
+            $rawResourceGroups += $Script:scriptConfig.tag_engine_config.simulated_results.in_scope_resource_groups.name
         }
         elseif ($scriptBoundParameters.ContainsKey('SimulateResults') -eq $true) {
-            $rawResourceGroups += $Filters
+            $rawResourceGroups += $Script:scriptConfig.tag_engine_config.processing_filters.resource_group_filter
         }
         else {
             $rawResourceGroups = @((Get-AzResourceGroup).ResourceGroupName)
         }
 
         $rawResourceGroups |
-        Where-Object { ($Filters -contains "*") -or ($Filters -contains $_) -or ($Filters -contains $_) } |
+        Where-Object { ($Filters.Count -eq 0) -or ($Filters -contains $_) -or ($Filters -contains $_) } |
         ForEach-Object { $resourceGroupsInScope += $_ }
 
         Write-LogMessage -LogLevel "$( [AllLogLevels]::Debug )" -Indentation 1 -Message "ResourceGroupsInScope: $( $resourceGroupsInScope -join ", " )"
@@ -468,7 +490,7 @@ begin {
         }
 
         # Required Dynamic Tag Rules
-        foreach ($currentRequiredTagKey in $RequiredTagKeys) {
+        foreach ($currentRequiredTagKey in $Script:scriptConfig.tag_engine_config.required_tag_keys) {
             foreach ($ruleSubscriptionRequiredCategoryRule in ($Script:scriptRulePluginConfig["rules_config"]["resource_group_required"] | Sort-Object -Property order, instance_name)) {
                 $executeRuleDefinition = $Script:scriptRulePluginDefinitions.Value | Where-Object { $_.rule_definition -eq $ruleSubscriptionRequiredCategoryRule.rule_definition }
                 Write-LogMessage -LogLevel "$( [AllLogLevels]::Debug )" -Indentation 2 -Message "Calling Plugin Rule: $( $executeRuleDefinition.RuleName ) ($( $ruleSubscriptionRequiredCategoryRule.instance_name ) - ${currentRequiredTagKey})"
@@ -511,6 +533,7 @@ begin {
             [Parameter(Mandatory = $true)]
             [string]$ResourceGroup,
             [Parameter(Mandatory = $true)]
+            [AllowEmptyCollection()]
             [string[]]$Filters
         )
         $resourcesInScope = @()
@@ -534,6 +557,7 @@ begin {
 
     # ############################## Script Initialization ##############################
     Initialize-Logging -LogFilePath $LogFilePath
+    Initialize-ScriptSettings -ConfigPath $ScriptConfigPath
 
     $pluginDefinitions = Import-RulePluginDefinitionsToSession -RulePluginPath $RulePluginPath
     $pluginConfig = Import-RulePluginConfigurationToSession -RulePluginPath $RulePluginPath
@@ -542,11 +566,16 @@ begin {
     New-Variable -Name 'scriptRulePluginConfig' -Value $pluginConfig -Scope Script -Option ReadOnly -Force
 
     Write-LogMessage -LogLevel "$( [AllLogLevels]::Info )" -Indentation 1 -Message "Loading Rule Plugin Configuration (_TagRuleConfig.yml)..."
+    
+    $ruleConfigCount = 0
     foreach ($currentRuleCategory in $Script:scriptRulePluginConfig["rules_config"].Keys) {
         foreach ($currentRuleInstance in $Script:scriptRulePluginConfig["rules_config"]["${currentRuleCategory}"]) {
-            Write-LogMessage -LogLevel "$( [AllLogLevels]::Verbose )" -Indentation 1 -Message "Category: ${currentRuleCategory} / Instance: $($currentRuleInstance.instance_name) / Definition: $($currentRuleInstance.rule_definition) / Order: $($currentRuleInstance.order)"
+            $ruleConfigCount += 1
+            Write-LogMessage -LogLevel "$( [AllLogLevels]::Debug )" -Indentation 1 -Message "Category: ${currentRuleCategory} / Instance: $($currentRuleInstance.instance_name) / Definition: $($currentRuleInstance.rule_definition) / Order: $($currentRuleInstance.order)"
         }
     }
+
+    Write-LogMessage -LogLevel "$( [AllLogLevels]::Info )" -Indentation 1 -Message "Loaded $( $ruleConfigCount ) rule plugin configurations"
 
     Write-LogHeader -LogLevel "$( [AllLogLevels]::Debug )" -Header "Exiting Begin Block" -ConsoleColor "Magenta"
 }
@@ -554,7 +583,7 @@ process {
     # ############################## Main Script Orchestration ##############################
     Write-LogHeader -LogLevel "$( [AllLogLevels]::Debug )" -Header "Entering Process Block" -ConsoleColor "Magenta"
 
-    $subscriptionIdsInScope = Get-InScopeSubscriptionIds -Filters $SubscriptionIdFilters
+    $subscriptionIdsInScope = Get-InScopeSubscriptionIds -Filters $script:scriptConfig.tag_engine_config.processing_filters.subscription_id_filter
     foreach ($currentSubscriptionId in $subscriptionIdsInScope) {
         
         Write-LogHeader -LogLevel "$( [AllLogLevels]::Error )" -Indentation 1 -Header "Processing Subscription: /subscriptions/${currentSubscriptionId}" -ConsoleColor "Green"
@@ -567,7 +596,7 @@ process {
             Invoke-SubscriptionTagCleanOrchestrator -SubscriptionId $currentSubscriptionId
         }
 
-        $resourceGroupsinScope = Get-InScopeResourceGroups -SubscriptionId $currentSubscriptionId -Filters $ResourceGroupFilters
+        $resourceGroupsinScope = Get-InScopeResourceGroups -SubscriptionId $currentSubscriptionId -Filters $script:scriptConfig.tag_engine_config.processing_filters.resource_group_filter
         foreach ($currentResourceGroup in $resourceGroupsinScope) {
             $currentResourceGroupId = "/subscriptions/${currentSubscriptionId}/resourceGroups/${currentResourceGroup}"
             
@@ -581,7 +610,7 @@ process {
                 Invoke-ResourceGroupTagCleanOrchestrator -SubscriptionId $currentSubscriptionId -ResourceGroup $currentResourceGroup
             }
 
-            $resourcesInScope = Get-InScopeResources -SubscriptionId $currentSubscriptionId -ResourceGroup $currentResourceGroup -Filters $ResourceIdFilters
+            $resourcesInScope = Get-InScopeResources -SubscriptionId $currentSubscriptionId -ResourceGroup $currentResourceGroup -Filters $script:scriptConfig.tag_engine_config.processing_filters.resource_id_filter
             
             foreach ($currentResource in $resourcesInScope) {
                 if ($Script:processedResources -contains $currentResourceGroupId) {
@@ -593,8 +622,10 @@ process {
                     Invoke-ResourceTagCleanOrchestrator -SubscriptionId $currentSubscriptionId -ResourceGroup $currentResourceGroup -Resource $currentResource
                 }
             
-                Write-LogHeader -LogLevel "$( [AllLogLevels]::Error )" -Indentation 2 -Header "Resource Group Processed: ${currentResourceGroupId}" -ConsoleColor "Green"
+                Write-LogHeader -LogLevel "$( [AllLogLevels]::Error )" -Indentation 3 -Header "Resource Processed: ${currentResource}" -ConsoleColor "Green"    
             }
+
+            Write-LogHeader -LogLevel "$( [AllLogLevels]::Error )" -Indentation 2 -Header "Resource Group Processed: ${currentResourceGroupId}" -ConsoleColor "Green"
         }
 
         Write-LogHeader -LogLevel "$( [AllLogLevels]::Error )" -Indentation 1 -Header "Subscription Processed: /subscriptions/${currentSubscriptionId}" -ConsoleColor "Green"
@@ -603,10 +634,10 @@ process {
     Write-LogHeader -LogLevel "$( [AllLogLevels]::Debug )" -Header "Exiting Process Block" -ConsoleColor "Magenta"
 }
 end {
-    Write-LogHeader -LogLevel "$( [AllLogLevels]::Debug )" -Header "Entering End Block" -ConsoleColor "Magenta"
-    Write-LogHeader -LogLevel "$( [AllLogLevels]::Debug )" -Header "Exiting End Block" -ConsoleColor "Magenta"
+    # Write-LogHeader -LogLevel "$( [AllLogLevels]::Debug )" -Header "Entering End Block" -ConsoleColor "Magenta"
+    # Write-LogHeader -LogLevel "$( [AllLogLevels]::Debug )" -Header "Exiting End Block" -ConsoleColor "Magenta"
 }
 clean {
-    Write-LogHeader -LogLevel "$( [AllLogLevels]::Debug )" -Header "Entering Clean Block" -ConsoleColor "Magenta"
-    Write-LogHeader -LogLevel "$( [AllLogLevels]::Debug )" -Header "Exiting Clean Block" -ConsoleColor "Magenta"
+    # Write-LogHeader -LogLevel "$( [AllLogLevels]::Debug )" -Header "Entering Clean Block" -ConsoleColor "Magenta"
+    # Write-LogHeader -LogLevel "$( [AllLogLevels]::Debug )" -Header "Exiting Clean Block" -ConsoleColor "Magenta"
 }
