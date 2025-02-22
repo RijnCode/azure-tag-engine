@@ -2,10 +2,10 @@
 
 <#
 .SYNOPSIS
-Sample plugin rule definition for performing a regex replace on a tag keys
+Sample plugin rule definition for setting a value in memory that can be used in other rules
 
 .DESCRIPTION
-Sample plugin rule definition for performing a regex replace on a tag keys
+Sample plugin rule definition for setting a value in memory that can be used in other rules
 
 #>
 [CmdletBinding(SupportsShouldProcess = $false)]
@@ -32,7 +32,7 @@ begin {
 }
 process {
 
-    function global:Invoke-TagRuleRegexReplace {
+    function global:Invoke-TagRuleSetValue {
         [CmdletBinding(SupportsShouldProcess = $false)]
         param (
             [ValidateNotNullOrWhiteSpace()]
@@ -53,36 +53,23 @@ process {
 
         Write-LogMessage -LogLevel "$( [AllLogLevels]::Debug )" -Indentation $Indentation -Message "$( $MyInvocation.MyCommand ) (${InstanceName}) - Executing Rule"
 
-
-        if ($Inputs.apply_to -eq "key") {
-            $keysMatchingSearch = @(
-                $Tags.Value.Keys |
-                Where-Object { $_ -match $Inputs.search_regex }
-            )
-
-            Write-LogMessage -LogLevel "$( [AllLogLevels]::Verbose )" -Indentation $Indentation -Message "$( $MyInvocation.MyCommand ) (${InstanceName}) - Rule Matches: $( $keysMatchingSearch.Count )"
-
-            foreach ($keyToReplace in $keysMatchingSearch) {
-                $newKey = $keyToReplace -replace $Inputs.search_regex, $Inputs.value_replacement
-                $Tags.Value[$newKey] = $Tags.Value[$keyToReplace]
-                $Tags.Value.Remove($keyToReplace)
-            }
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseDeclaredVarsMoreThanAssignments', '', Justification = 'Variable is used in Invoke-TagRuleUseSetValue rule')]
+        $Global:RijnCodeTempValue = @{  
+            'resource_id'      = $Inputs.resource_id
+            'some_other_value' = $Inputs.value_to_set
         }
 
-        if ($Inputs.apply_to -eq "value") {
-            $keysMatchingSearch = @(
-                $Tags.Value.Keys | 
-                Where-Object { $Tags.Value[$_] -match $Inputs.search_regex }
-            )
-
-            Write-LogMessage -LogLevel "$( [AllLogLevels]::Verbose )" -Indentation $Indentation -Message "$( $MyInvocation.MyCommand ) (${InstanceName}) - Rule Matches: $( $keysMatchingSearch.Count )"
-
-            foreach ($keyOfValueToReplace in $keysMatchingSearch) {
-                $Tags.Value[$keyOfValueToReplace] = $Tags.Value[$keyOfValueToReplace] -replace $Inputs.search_regex, $Inputs.value_replacement
-            }
+        # Dynamically default a statistic for each rule instance for custom TagEngine output at end of run
+        $Global:TagEngineCustomStatistics = [ordered]@{}
+        $ruleConfigContent = Get-Content -Path "${PSScriptRoot}/_TagRuleConfig.yml" | ConvertFrom-Yaml -Ordered -Verbose:$false
+        $tempHashTable = [ordered]@{}
+        $ruleConfigContent.rules_config.all_tags.GetEnumerator() | Sort-Object -Property order | ForEach-Object { $tempHashTable.Add($_.instance_name, 0) }
+        foreach ($ruleAllTagsCategoryRule in @('Subscription', 'ResourceGroup', 'Resource', 'Total')) {
+            $Global:TagEngineCustomStatistics[$ruleAllTagsCategoryRule] = $tempHashTable
         }
 
-        Write-LogMessage -LogLevel "$( [AllLogLevels]::Debug )" -Indentation $Indentation -Message "$( $MyInvocation.MyCommand ) (${InstanceName}) - Post-Execution Tags: $( $Tags.Value | ConvertTo-Json -Compress -Depth 99 )"
+        Write-LogMessage -LogLevel "$( [AllLogLevels]::Verbose )" -Indentation $Indentation -Message "$( $MyInvocation.MyCommand ) (${InstanceName}) - Values Set: 2"
+
         Write-LogMessage -LogLevel "$( [AllLogLevels]::Debug )" -Indentation $Indentation -Message "$( $MyInvocation.MyCommand ) (${InstanceName}) - Execution Complete"
     }
 

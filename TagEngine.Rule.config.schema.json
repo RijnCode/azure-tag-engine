@@ -1,0 +1,36 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "properties": {
+      "rules_config": {
+        "type": "object",
+        "properties": {
+          "all_tags": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "order": {
+                  "type": "integer"
+                },
+                "instance_name": {
+                  "type": "string"
+                },
+                "rule_definition": {
+                  "type": "string"
+                },
+                "inputs": {
+                  "type": "object",
+                  "required": []
+                }
+              },
+              "required": ["order", "instance_name", "rule_definition", "inputs"]
+            }
+          }
+        },
+        "required": ["all_tags"]
+      }
+    },
+    "required": ["rules_config"]
+  }
+  

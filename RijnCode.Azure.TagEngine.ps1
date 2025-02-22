@@ -8,7 +8,7 @@ Rule Engine for applying tags to Azure resources
 Rule Engine for applying tags to Azure resources
 
 .EXAMPLE
-RijnCode.Azure.TagEngine.ps1 -RequiredTagKeys @("key1", "key2") -Scopes @("Subscription") -TenantId "00000000-0000-0000-0000-000000000000" -SubscriptionIdFilters @("00000000-0000-0000-0000-000000000000")
+RijnCode.Azure.TagEngine.ps1 -Scopes @("Subscription") -TenantId "00000000-0000-0000-0000-000000000000" -ConsoleLogLevel "Info" -LogFileLevel "Debug" -SimulateResults
 #>
 [CmdletBinding(SupportsShouldProcess = $true)]
 param (
@@ -276,6 +276,7 @@ begin {
             $rawSubscriptions += $Script:scriptConfig.tag_engine_config.processing_filters.subscription_id_filter
         }
         else {
+            # Skip disabled subscriptions because they are non-editable
             $rawSubscriptions = Get-AzSubscription -TenantId $TenantId |
             Where-Object { $_.State -eq "Enabled" }
         }
@@ -322,7 +323,7 @@ begin {
         Write-LogMessage -LogLevel "$( [AllLogLevels]::Debug )" -Indentation $Indentation -Message "Updating Tags - Resource: $( $ResourceId ) / Tags: $( $Tags | ConvertTo-Json -Compress -Depth 99 )"
 
         if ($PSCmdlet.ShouldProcess($ResourceId)) {
-
+            
         }
     }
 
@@ -341,15 +342,17 @@ begin {
             [string]$SubscriptionId
         )
 
-        $existingSubscriptionTags = Get-CloudSubscriptionResourceTags -ResourceId "/subscriptions/${SubscriptionId}"
+        $subscriptiopnResourceId = "/subscriptions/${SubscriptionId}"
+        $existingSubscriptionTags = Get-CloudSubscriptionResourceTags -ResourceId $subscriptiopnResourceId
 
-        Write-LogMessage -LogLevel "$( [AllLogLevels]::Verbose )" -Indentation 1 -Message "Original Subscription Tags: $( $existingSubscriptionTags | ConvertTo-Json -Compress -Depth 99 )"
+        $sortedHashTable = [ordered]@{}
+        $existingSubscriptionTags.GetEnumerator() | Sort-Object -Property Name | ForEach-Object { $sortedHashTable[$_.Key] = $_.Value }
+        Write-LogMessage -LogLevel "$( [AllLogLevels]::Info )" -Indentation 1 -Message "Original Subscription Tags: $( $sortedHashTable | ConvertTo-Json -Compress -Depth 99 )"
 
         $updatedSubscriptionTags = @{}
         $updatedSubscriptionTags += $existingSubscriptionTags
         $updatedSubscriptionTagsRef = [ref]$updatedSubscriptionTags
 
-        # All Tag Rules
         foreach ($ruleAllTagsCategoryRule in ($Script:scriptRulePluginConfig["rules_config"]["all_tags"] | Sort-Object -Property order, instance_name)) {
             $executeRuleDefinition = $Script:scriptRulePluginDefinitions.Value | Where-Object { $_.rule_definition -eq $ruleAllTagsCategoryRule.rule_definition }
             Write-LogMessage -LogLevel "$( [AllLogLevels]::Debug )" -Indentation 1 -Message "Calling Plugin Rule: $( $executeRuleDefinition.RuleName ) ($( $ruleAllTagsCategoryRule.instance_name ))"
@@ -360,6 +363,9 @@ begin {
                 Write-LogMessage -LogLevel "$( [AllLogLevels]::Error )" -Indentation 1 -Message "Plugin Rule Call Failed: $( $executeRuleDefinition.RuleName )"
                 throw "Rule Invoke Failed: $( $executeRuleDefinition.RuleName )"
             }
+
+            $ruleAllTagsCategoryRule.inputs['executing_context'] = 'Subscription'
+            $ruleAllTagsCategoryRule.inputs['resource_id'] = $subscriptiopnResourceId
 
             [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseDeclaredVarsMoreThanAssignments', '', Justification = 'Variable is used in Invoke-Expression')]
             $currentRuleParams = @{
@@ -372,36 +378,9 @@ begin {
             Invoke-Expression "$currentRuleFunctionName @currentRuleParams" -Verbose:$false # Disable verbose to hide function reload warning
         }
 
-        # Required Dynamic Tag Rules
-        foreach ($currentRequiredTagKey in $Script:scriptConfig.tag_engine_config.required_tag_keys) {
-            foreach ($ruleSubscriptionRequiredCategoryRule in ($Script:scriptRulePluginConfig["rules_config"]["subscription_required"] | Sort-Object -Property order, instance_name)) {
-                $executeRuleDefinition = $Script:scriptRulePluginDefinitions.Value | Where-Object { $_.rule_definition -eq $ruleSubscriptionRequiredCategoryRule.rule_definition }
-                Write-LogMessage -LogLevel "$( [AllLogLevels]::Debug )" -Indentation 1 -Message "Calling Plugin Rule: $( $executeRuleDefinition.RuleName ) ($( $ruleSubscriptionRequiredCategoryRule.instance_name ) - ${currentRequiredTagKey})"
-
-                $currentRuleFunctionName = $($executeRuleDefinition.RuleName)
-                $ruleCommand = Get-Command -CommandType "Function" -Name $currentRuleFunctionName
-                if ($null -eq $ruleCommand) {
-                    Write-LogMessage -LogLevel "$( [AllLogLevels]::Error )" -Indentation 1 -Message "Plugin Rule Call Failed: $( $executeRuleDefinition.RuleName )"
-                    throw "Rule Invoke Failed: $( $executeRuleDefinition.RuleName )"
-                }
-
-                $ruleSubscriptionRequiredCategoryRule.inputs['required_tag_key'] = $currentRequiredTagKey
-
-                [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseDeclaredVarsMoreThanAssignments', '', Justification = 'Variable is used in Invoke-Expression')]
-                $currentRuleParams = @{
-                    'InstanceName' = $ruleSubscriptionRequiredCategoryRule.instance_name
-                    'Inputs'       = $ruleSubscriptionRequiredCategoryRule.inputs
-                    'Tags'         = $updatedSubscriptionTagsRef
-                    'Indentation'  = 1
-                }
-
-                Invoke-Expression "$currentRuleFunctionName @currentRuleParams" -Verbose:$false # Disable verbose to hide function reload warning
-
-                $ruleSubscriptionRequiredCategoryRule.inputs.Remove('required_tag_key')
-            }
-        }
-
-        Write-LogMessage -LogLevel "$( [AllLogLevels]::Verbose )" -Indentation 1 -Message "Final Subscription Tags: $( $updatedSubscriptionTags | ConvertTo-Json -Compress -Depth 99 )"
+        $sortedHashTable = [ordered]@{}
+        $updatedSubscriptionTags.GetEnumerator() | Sort-Object -Property Name | ForEach-Object { $sortedHashTable[$_.Key] = $_.Value }
+        Write-LogMessage -LogLevel "$( [AllLogLevels]::Info )" -Indentation 1 -Message "Final Subscription Tags: $( $sortedHashTable | ConvertTo-Json -Compress -Depth 99 )"
         Update-CloudResourceTags -ResourceId $SubscriptionId -Tags $updatedSubscriptionTags -Indentation 1
 
         $Script:processedSubscriptions += $SubscriptionId
@@ -427,7 +406,8 @@ begin {
             $rawResourceGroups += $Script:scriptConfig.tag_engine_config.processing_filters.resource_group_filter
         }
         else {
-            $rawResourceGroups = @((Get-AzResourceGroup).ResourceGroupName)
+            # Skip ManagedBy resource groups because they frequently have denyed policies that prevent direct tagging
+            $rawResourceGroups = @((Get-AzResourceGroup | Where-Object { -not $_.ManagedBy }).ResourceGroupName)
         }
 
         $rawResourceGroups |
@@ -456,17 +436,18 @@ begin {
             [string]$ResourceGroup
         )
 
-        $resourceGroupId = "/subscriptions/${SubscriptionId}/resourceGroups/${ResourceGroup}"
+        $resourceGroupResourceId = "/subscriptions/${SubscriptionId}/resourceGroups/${ResourceGroup}"
 
-        $existingResourceGroupTags = Get-CloudSubscriptionResourceTags -ResourceId $resourceGroupId
+        $existingResourceGroupTags = Get-CloudSubscriptionResourceTags -ResourceId $resourceGroupResourceId
 
-        Write-LogMessage -LogLevel "$( [AllLogLevels]::Verbose )" -Indentation 2 -Message "Original Resource Group Tags: $( $existingResourceGroupTags | ConvertTo-Json -Compress -Depth 99 )"
+        $sortedHashTable = [ordered]@{}
+        $existingResourceGroupTags.GetEnumerator() | Sort-Object -Property Name | ForEach-Object { $sortedHashTable[$_.Key] = $_.Value }
+        Write-LogMessage -LogLevel "$( [AllLogLevels]::Info )" -Indentation 2 -Message "Original Resource Group Tags: $( $sortedHashTable | ConvertTo-Json -Compress -Depth 99 )"
 
         $updatedResourceGroupTags = @{}
         $updatedResourceGroupTags += $existingResourceGroupTags
         $updatedResourceGroupTagsRef = [ref]$updatedResourceGroupTags
 
-        # All Tag Rules
         foreach ($ruleAllTagsCategoryRule in ($Script:scriptRulePluginConfig["rules_config"]["all_tags"] | Sort-Object -Property order, instance_name)) {
             $executeRuleDefinition = $Script:scriptRulePluginDefinitions.Value | Where-Object { $_.rule_definition -eq $ruleAllTagsCategoryRule.rule_definition }
             Write-LogMessage -LogLevel "$( [AllLogLevels]::Debug )" -Indentation 2 -Message "Calling Plugin Rule: $( $executeRuleDefinition.RuleName ) ($( $ruleAllTagsCategoryRule.instance_name ))"
@@ -477,6 +458,9 @@ begin {
                 Write-LogMessage -LogLevel "$( [AllLogLevels]::Error )" -Indentation 2 -Message "Plugin Rule Call Failed: $( $executeRuleDefinition.RuleName )"
                 throw "Rule Invoke Failed: $( $executeRuleDefinition.RuleName )"
             }
+
+            $ruleAllTagsCategoryRule.inputs['executing_context'] = 'ResourceGroup'
+            $ruleAllTagsCategoryRule.inputs['resource_id'] = $resourceGroupResourceId 
 
             [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseDeclaredVarsMoreThanAssignments', '', Justification = 'Variable is used in Invoke-Expression')]
             $currentRuleParams = @{
@@ -489,39 +473,12 @@ begin {
             Invoke-Expression "$currentRuleFunctionName @currentRuleParams" -Verbose:$false # Disable verbose to hide function reload warning
         }
 
-        # Required Dynamic Tag Rules
-        foreach ($currentRequiredTagKey in $Script:scriptConfig.tag_engine_config.required_tag_keys) {
-            foreach ($ruleSubscriptionRequiredCategoryRule in ($Script:scriptRulePluginConfig["rules_config"]["resource_group_required"] | Sort-Object -Property order, instance_name)) {
-                $executeRuleDefinition = $Script:scriptRulePluginDefinitions.Value | Where-Object { $_.rule_definition -eq $ruleSubscriptionRequiredCategoryRule.rule_definition }
-                Write-LogMessage -LogLevel "$( [AllLogLevels]::Debug )" -Indentation 2 -Message "Calling Plugin Rule: $( $executeRuleDefinition.RuleName ) ($( $ruleSubscriptionRequiredCategoryRule.instance_name ) - ${currentRequiredTagKey})"
+        $sortedHashTable = [ordered]@{}
+        $updatedResourceGroupTags.GetEnumerator() | Sort-Object -Property Name | ForEach-Object { $sortedHashTable[$_.Key] = $_.Value }
+        Write-LogMessage -LogLevel "$( [AllLogLevels]::Info )" -Indentation 2 -Message "Final Resource Group Tags: $( $sortedHashTable | ConvertTo-Json -Compress -Depth 99 )"
+        Update-CloudResourceTags -ResourceId $resourceGroupResourceId -Tags $updatedResourceGroupTags -Indentation 2
 
-                $currentRuleFunctionName = $($executeRuleDefinition.RuleName)
-                $ruleCommand = Get-Command -CommandType "Function" -Name $currentRuleFunctionName
-                if ($null -eq $ruleCommand) {
-                    Write-LogMessage -LogLevel "$( [AllLogLevels]::Error )" -Indentation 2 -Message "Plugin Rule Call Failed: $( $executeRuleDefinition.RuleName )"
-                    throw "Rule Invoke Failed: $( $executeRuleDefinition.RuleName )"
-                }
-
-                $ruleSubscriptionRequiredCategoryRule.inputs['required_tag_key'] = $currentRequiredTagKey
-
-                [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseDeclaredVarsMoreThanAssignments', '', Justification = 'Variable is used in Invoke-Expression')]
-                $currentRuleParams = @{
-                    'InstanceName' = $ruleSubscriptionRequiredCategoryRule.instance_name
-                    'Inputs'       = $ruleSubscriptionRequiredCategoryRule.inputs
-                    'Tags'         = $updatedResourceGroupTagsRef
-                    'Indentation'  = 2
-                }
-
-                Invoke-Expression "$currentRuleFunctionName @currentRuleParams" -Verbose:$false # Disable verbose to hide function reload warning
-
-                $ruleSubscriptionRequiredCategoryRule.inputs.Remove('required_tag_key')
-            }
-        }
-
-        Write-LogMessage -LogLevel "$( [AllLogLevels]::Verbose )" -Indentation 2 -Message "Final Resource Group Tags: $( $updatedResourceGroupTags | ConvertTo-Json -Compress -Depth 99 )"
-        Update-CloudResourceTags -ResourceId $resourceGroupId -Tags $updatedResourceGroupTags -Indentation 2
-
-        $Script:processedResourceGroups += $resourceGroupId
+        $Script:processedResourceGroups += $resourceGroupResourceId
     }
 
     function Get-InScopeResources {
@@ -634,8 +591,22 @@ process {
     Write-LogHeader -LogLevel "$( [AllLogLevels]::Debug )" -Header "Exiting Process Block" -ConsoleColor "Magenta"
 }
 end {
-    # Write-LogHeader -LogLevel "$( [AllLogLevels]::Debug )" -Header "Entering End Block" -ConsoleColor "Magenta"
-    # Write-LogHeader -LogLevel "$( [AllLogLevels]::Debug )" -Header "Exiting End Block" -ConsoleColor "Magenta"
+    Write-LogHeader -LogLevel "$( [AllLogLevels]::Debug )" -Header "Entering End Block" -ConsoleColor "Magenta"
+
+    # ############################## Final Results ##############################
+
+    Write-LogHeader -LogLevel "$( [AllLogLevels]::Info )" -Indentation 1 -Header "Final Results" -ConsoleColor "Blue"
+    Write-LogMessage -LogLevel "$( [AllLogLevels]::Info )" -Indentation 1 -Message "Processed $( $Script:processedSubscriptions.Count ) Subscriptions" -ConsoleColor "Blue"
+    Write-LogMessage -LogLevel "$( [AllLogLevels]::Info )" -Indentation 1 -Message "Processed $( $Script:processedResourceGroups.Count ) Resource Groups" -ConsoleColor "Blue"
+    Write-LogMessage -LogLevel "$( [AllLogLevels]::Info )" -Indentation 1 -Message "Processed $( $Script:processedResources.Count ) Resources" -ConsoleColor "Blue"
+
+    if ((Test-Path variable:CustomStatistics) -eq $true) {
+        $sortedHashTable = [ordered]@{}
+        $Global:TagEngineCustomStatistics.GetEnumerator() | ForEach-Object { $sortedHashTable[$_.Key] = $_.Value }
+        Write-LogMessage -LogLevel "$( [AllLogLevels]::Info )" -Indentation 1 -Message "User-Defined Custom Statistics: `n$( ($sortedHashTable | ConvertTo-Json -Depth 99) -replace '(?m)^(?!\s*$)', '    ' )" -ConsoleColor "Blue"
+    }
+
+    Write-LogHeader -LogLevel "$( [AllLogLevels]::Debug )" -Header "Exiting End Block" -ConsoleColor "Magenta"
 }
 clean {
     # Write-LogHeader -LogLevel "$( [AllLogLevels]::Debug )" -Header "Entering Clean Block" -ConsoleColor "Magenta"

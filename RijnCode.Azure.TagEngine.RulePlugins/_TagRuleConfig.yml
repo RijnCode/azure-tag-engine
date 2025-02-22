@@ -1,26 +1,47 @@
 rules_config:
   all_tags:
     - order: 1
-      instance_name: Leading Whitespace
-      rule_definition: Invoke-TagRuleRegexReplaceDefinition
+      instance_name: Resource Group Set Global Values
+      rule_definition: Invoke-TagRuleSetValueDefinition
       inputs:
-        search_regex: ^\s+
-        value_replacement: " "
+        value_to_set: "Hello World!"
     - order: 2
-      instance_name: Trailing Whitespace
+      instance_name: Key - Trim Leading/Trailing Whitespace
       rule_definition: Invoke-TagRuleRegexReplaceDefinition
       inputs:
-        search_regex: \s+$
-        value_replacement: " "
-  subscription_required:
-    - order: 1
-      instance_name: Subscription Required Tags
+        apply_to: key
+        search_regex: ^\s+|\s+$
+        value_replacement: ""
+    - order: 3
+      instance_name: Value - Trim Leading/Trailing Whitespace
+      rule_definition: Invoke-TagRuleRegexReplaceDefinition
+      inputs:
+        apply_to: value
+        search_regex: ^\s+|\s+$
+        value_replacement: ""
+    - order: 4
+      instance_name: Resource Group - Required Tags - SimpleKey1
       rule_definition: Invoke-TagRuleRatcliffObershelpMatchCloneDefinition
       inputs:
+        apply_context: ResourceGroup
         minimum_score: .95
-  resource_group_required:
-    - order: 1
-      instance_name: Resource Group Required Tags
+        required_tag_key: SimpleKey1
+    - order: 5
+      instance_name: Resource Group - Required Tags - SimpleKey2
       rule_definition: Invoke-TagRuleRatcliffObershelpMatchCloneDefinition
       inputs:
+        apply_context: ResourceGroup
         minimum_score: .95
+        required_tag_key: SimpleKey2
+    - order: 6
+      instance_name: Resource Group - Required Tags - ComplexTagKey3
+      rule_definition: Invoke-TagRuleRatcliffObershelpMatchCloneDefinition
+      inputs:
+        apply_context: ResourceGroup
+        minimum_score: .95
+        required_tag_key: ComplexTagKey3
+    - order: 7
+      instance_name: Resource Group Get Global Values
+      rule_definition: Invoke-TagRuleUseSetValueDefinition
+      inputs: 
+        value_to_set: "Hello World!"

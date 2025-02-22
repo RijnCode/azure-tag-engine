@@ -46,7 +46,13 @@ process {
             [Parameter(Mandatory = $true)]
             [int]$Indentation
         )
-        Write-LogMessage -LogLevel "$( [AllLogLevels]::Verbose )" -Indentation $Indentation -Message "$( $MyInvocation.MyCommand ) (${InstanceName}) - Executing Rule"
+
+        if ($Inputs.executing_context -ine $Inputs.apply_context) {
+            Write-LogMessage -LogLevel "$( [AllLogLevels]::Debug )" -Indentation $Indentation -Message "$( $MyInvocation.MyCommand ) (${InstanceName}) - Skipping Rule - Apply Context: $( $Inputs.apply_context ) - Executing Context: $( $Inputs.executing_context )"
+            return;
+        }
+
+        Write-LogMessage -LogLevel "$( [AllLogLevels]::Debug )" -Indentation $Indentation -Message "$( $MyInvocation.MyCommand ) (${InstanceName}) - Executing Rule"
 
         # Get base count for log stats
         $similiarityResults = @()
@@ -79,7 +85,7 @@ process {
         }
 
         Write-LogMessage -LogLevel "$( [AllLogLevels]::Debug )" -Indentation $Indentation -Message "$( $MyInvocation.MyCommand ) (${InstanceName}) - Post-Execution Tags: $( $Tags.Value | ConvertTo-Json -Compress -Depth 99 )"
-        Write-LogMessage -LogLevel "$( [AllLogLevels]::Verbose )" -Indentation $Indentation -Message "$( $MyInvocation.MyCommand ) (${InstanceName}) - Execution Complete"
+        Write-LogMessage -LogLevel "$( [AllLogLevels]::Debug )" -Indentation $Indentation -Message "$( $MyInvocation.MyCommand ) (${InstanceName}) - Execution Complete"
     }
 
 }

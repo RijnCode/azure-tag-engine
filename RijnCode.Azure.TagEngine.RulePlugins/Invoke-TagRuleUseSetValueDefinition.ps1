@@ -2,10 +2,10 @@
 
 <#
 .SYNOPSIS
-Sample plugin rule definition for performing a regex replace on a tag keys
+Sample plugin rule definition for using a previously set in-memory value
 
 .DESCRIPTION
-Sample plugin rule definition for performing a regex replace on a tag keys
+Sample plugin rule definition for using a previously set in-memory value
 
 #>
 [CmdletBinding(SupportsShouldProcess = $false)]
@@ -32,7 +32,7 @@ begin {
 }
 process {
 
-    function global:Invoke-TagRuleRegexReplace {
+    function global:Invoke-TagRuleUseSetValue {
         [CmdletBinding(SupportsShouldProcess = $false)]
         param (
             [ValidateNotNullOrWhiteSpace()]
@@ -53,36 +53,8 @@ process {
 
         Write-LogMessage -LogLevel "$( [AllLogLevels]::Debug )" -Indentation $Indentation -Message "$( $MyInvocation.MyCommand ) (${InstanceName}) - Executing Rule"
 
+        Write-LogMessage -LogLevel "$( [AllLogLevels]::Verbose )" -Indentation $Indentation -Message "$( $MyInvocation.MyCommand ) (${InstanceName}) - Values Get: $( $Global:RijnCodeTempValue | ConvertTo-Json -Compress -Depth 99 )"
 
-        if ($Inputs.apply_to -eq "key") {
-            $keysMatchingSearch = @(
-                $Tags.Value.Keys |
-                Where-Object { $_ -match $Inputs.search_regex }
-            )
-
-            Write-LogMessage -LogLevel "$( [AllLogLevels]::Verbose )" -Indentation $Indentation -Message "$( $MyInvocation.MyCommand ) (${InstanceName}) - Rule Matches: $( $keysMatchingSearch.Count )"
-
-            foreach ($keyToReplace in $keysMatchingSearch) {
-                $newKey = $keyToReplace -replace $Inputs.search_regex, $Inputs.value_replacement
-                $Tags.Value[$newKey] = $Tags.Value[$keyToReplace]
-                $Tags.Value.Remove($keyToReplace)
-            }
-        }
-
-        if ($Inputs.apply_to -eq "value") {
-            $keysMatchingSearch = @(
-                $Tags.Value.Keys | 
-                Where-Object { $Tags.Value[$_] -match $Inputs.search_regex }
-            )
-
-            Write-LogMessage -LogLevel "$( [AllLogLevels]::Verbose )" -Indentation $Indentation -Message "$( $MyInvocation.MyCommand ) (${InstanceName}) - Rule Matches: $( $keysMatchingSearch.Count )"
-
-            foreach ($keyOfValueToReplace in $keysMatchingSearch) {
-                $Tags.Value[$keyOfValueToReplace] = $Tags.Value[$keyOfValueToReplace] -replace $Inputs.search_regex, $Inputs.value_replacement
-            }
-        }
-
-        Write-LogMessage -LogLevel "$( [AllLogLevels]::Debug )" -Indentation $Indentation -Message "$( $MyInvocation.MyCommand ) (${InstanceName}) - Post-Execution Tags: $( $Tags.Value | ConvertTo-Json -Compress -Depth 99 )"
         Write-LogMessage -LogLevel "$( [AllLogLevels]::Debug )" -Indentation $Indentation -Message "$( $MyInvocation.MyCommand ) (${InstanceName}) - Execution Complete"
     }
 
